@@ -1,60 +1,101 @@
 # DummyShop
 
-A native Android product browser built on the [DummyJSON Products API](https://dummyjson.com/docs/products): search/filter/sort with scroll-based pagination, a product detail screen, and a local wishlist/cart — all cache-first with background refresh, so the app stays usable offline.
+DummyShop is a native Android shopping app built with Kotlin and Jetpack Compose. It uses the [DummyJSON Products API](https://dummyjson.com/docs/products) to provide a fast, modern product browsing experience with search, category filters, sorting, pagination, wishlist support, and a cart.
+
+## Overview
+
+The app is designed to feel responsive even when the network is weak or unavailable. Product data is cached locally with Room, and the UI uses Paging 3 to show previous results immediately while background refreshes keep the content up to date.
+
+## Features
+
+- Browse products from the DummyJSON API
+- Search products by keyword
+- Filter by category and sort by different criteria
+- Infinite scrolling with paging
+- View detailed product information
+- Save products to wishlist and cart
+- Use cached content when offline with a clear offline banner
 
 ## Install the APK
 
-A ready-to-install debug build is checked into this repo at [`apk/app-debug.apk`](apk/app-debug.apk). Sideload it onto a device or emulator:
+A ready-to-install debug APK is included in this repository at [apk/app-debug.apk](apk/app-debug.apk). Install it on an emulator or Android device with:
 
-```
+```bash
 adb install apk/app-debug.apk
 ```
 
-It's a debug-signed build (Android's default debug keystore) rather than a release build, since a release build needs a real signing keystore that isn't appropriate to fabricate for a submission like this.
-
-## Architecture
-
-Room is the single source of truth for everything shown on screen; the UI never renders a network response directly.
-
-```
-data/remote   → Retrofit ProductApi + DTOs (dummyjson.com)
-data/local    → Room entities/DAOs/AppDatabase (the cache)
-data/repository → ProductRepository + ProductsRemoteMediator (merges network into Room)
-domain        → plain Kotlin Product model used by the UI
-ui/*          → Compose screens + ViewModels, one package per screen
-```
-
-**Product list & pagination.** `ProductsRemoteMediator` (Paging 3) fetches one page at a time from `/products`, `/products/search`, or `/products/category/{slug}` (whichever filter mode is active) and merges it into two Room tables: `products` (canonical per-id cache, shared with wishlist/cart/detail) and `list_entries` (an ordered bridge table recording which product sits at which position for the *current* search/filter/sort combination — the `queryKey`). The Compose list screen reads from a `PagingSource` backed by `list_entries JOIN products`, so:
-- Cached results for the current query render immediately, before any network call resolves.
-- A failed network load surfaces as `LoadState.Error` from Paging 3 without touching what's already cached — the UI shows an **"offline, showing cached results"** banner over the existing list, or a full retry screen if there's nothing cached yet for that query.
-- Pull-to-refresh and infinite scroll are both just Paging 3 `REFRESH`/`APPEND` loads.
-
-**Wishlist & cart.** Two small local tables (`wishlist`, `cart`) joined against the same `products` cache. Opening either screen renders instantly from Room, then kicks off a bounded-concurrency background refetch of each saved product's `/products/{id}` to keep details fresh — same cache-first-with-error-banner treatment as the list.
-
-**Product detail.** Reads the cached product (already present if you navigated from a list/wishlist/cart row) and triggers a background refresh; shows a banner if the refresh fails but cached data exists, or a full retry state if it's never been cached and the fetch fails.
-
-**Known API constraint:** DummyJSON doesn't support combining a search query and a category filter in one request, so the list screen treats them as mutually exclusive — picking a category clears the search box and vice versa. Sorting applies to whichever mode is active.
+This is a debug build signed with Android’s default debug keystore, which is suitable for testing and local use.
 
 ## Tech stack
 
-Kotlin, Jetpack Compose (Material 3) + Navigation-Compose, Retrofit + OkHttp + kotlinx.serialization, Room, Paging 3, Coil, manual constructor-injection (no DI framework) via `DummyShopApp`.
+- Kotlin
+- Jetpack Compose + Material 3
+- Navigation Compose
+- Retrofit + OkHttp + kotlinx.serialization
+- Room
+- Paging 3
+- Coil
+- Manual constructor injection via DummyShopApp
 
-## Running it
+## Architecture
 
+Room is the single source of truth for everything shown on screen. The UI never renders a network response directly.
+
+```text
+data/remote   → Retrofit ProductApi + DTOs (dummyjson.com)
+data/local    → Room entities, DAOs, and AppDatabase (local cache)
+data/repository → ProductRepository + ProductsRemoteMediator (merge network data into Room)
+domain        → plain Kotlin Product model used by the UI
+ui/*          → Compose screens and ViewModels, organized by feature
 ```
-./gradlew assembleDebug          # build apk/app-debug.apk-equivalent output
-./gradlew testDebugUnitTest      # unit tests (Robolectric + in-memory Room)
+
+### Product list and pagination
+
+ProductsRemoteMediator uses Paging 3 to load one page at a time from the relevant DummyJSON endpoint. It stores results in Room so that:
+
+- cached results appear immediately,
+- pull-to-refresh works smoothly,
+- network failures do not wipe the already cached list.
+
+### Wishlist and cart
+
+Wishlist and cart entries are stored locally and joined against the same cached product table, so they load instantly and refresh in the background when possible.
+
+### Product detail screen
+
+The detail screen reads cached product data first and then refreshes it in the background. If the refresh fails but cached data exists, the app shows an offline-friendly banner instead of failing completely.
+
+## Build and run
+
+Requirements:
+
+- Android SDK
+- JDK 17+
+- Android Studio or the Android command-line tools
+
+Run:
+
+```bash
+./gradlew assembleDebug
+./gradlew testDebugUnitTest
 ```
 
-Requires the Android SDK (`compileSdk`/`targetSdk` 35, `minSdk` 24) and JDK 17+. `gradle.properties` pins the Gradle JVM to Android Studio's bundled JBR so it doesn't accidentally pick up a newer system JDK.
+The project pins the Gradle JVM to the Android Studio bundled JBR in gradle.properties to avoid version mismatches.
 
-### Unit tests
+## Testing
 
-`ProductsRemoteMediatorTest` (in-memory Room + a fake `ProductApi`) verifies: a `REFRESH` caches the first page and detects end-of-pagination, `APPEND` continues from the right offset and accumulates results, and — the important one — a network failure returns `MediatorResult.Error` **without deleting** whatever was already cached. `ProductRepositoryTest` covers wishlist add/remove, cart quantity updates (including auto-remove at zero), and the background product refresh path.
+The test suite includes:
 
-### Manually verifying the offline behavior
+- ProductsRemoteMediatorTest for paging and caching behavior
+- ProductRepositoryTest for wishlist, cart, and refresh logic
 
-1. Launch the app online, browse the list, open a couple of products, add one to your wishlist and one to your cart.
-2. Turn off the emulator's network (`adb shell svc wifi disable && adb shell svc data disable`, or toggle airplane mode).
-3. Pull-to-refresh the list, reopen the Wishlist/Cart tabs, and reopen a product detail page — cached content stays visible with an "offline, showing cached results" banner.
-4. Force-clear app data and relaunch fully offline — the list, wishlist, and cart all show a plain retry screen instead, since there's nothing cached yet.
+## Offline behavior
+
+To manually verify the offline experience:
+
+1. Launch the app while online and browse a few products.
+2. Add one item to the wishlist and one to the cart.
+3. Disable network access on the emulator or device.
+4. Refresh the list or reopen the wishlist, cart, or detail screen.
+
+Cached content should remain visible with an offline banner, while a fully cold start without any cached data should show a retry state instead.
